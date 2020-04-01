@@ -1201,6 +1201,9 @@ class LDASsetup:
 
                 fout.close() 
 
+        # copy MODIS_DVG ExtData file
+        shutil.copy2('../etc/GEOS_LandGridComp_ExtData.rc', self.rundir+'/GEOS_LandGridComp_ExtData.rc')
+
         fout=open(self.rundir+'/'+'cap_restart','w') 
         #fout.write(self.rqdExeInp['BEG_DATE'])
         fout.write(self.begDates[0].strftime('%Y%m%d %H%M%S'))
