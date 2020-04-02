@@ -96,8 +96,6 @@ contains
     type(TILECOORD_WRAP) :: tcwrap
 
     type(ESMF_Config) :: CF
-    character(len=ESMF_MAXSTR) :: SURFRC
-    type(ESMF_Config)          :: SCF 
 
     ! Begin...
 
@@ -153,11 +151,7 @@ contains
     VERIFY_(STATUS)
     assim = (LAND_ASSIM /= 'NO')
 
-    call MAPL_GetResource (MAPL, SURFRC, label = 'SURFRC:', default = 'GEOS_SurfaceGridComp.rc', RC=STATUS) ; VERIFY_(STATUS)
-    SCF = ESMF_ConfigCreate(rc=status) ; VERIFY_(STATUS)
-    call ESMF_ConfigLoadFile     (SCF,SURFRC,rc=status) ; VERIFY_(STATUS)
-    call ESMF_ConfigGetAttribute (SCF, label='MODIS_DVG:'  , value=MODIS_DVG  , DEFAULT=0, __RC__ ) 
-    call ESMF_ConfigDestroy      (SCF, __RC__)
+    call MAPL_GetResource (MAPL, MODIS_DVG, label = 'MODIS_DVG:', default = 0, RC=STATUS) ; VERIFY_(STATUS)
 
     allocate(ens_id(NUM_ENSEMBLE),LAND(NUM_ENSEMBLE),LANDPERT(NUM_ENSEMBLE))
     allocate(DATAATM(1))
