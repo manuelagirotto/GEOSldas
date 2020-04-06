@@ -57,10 +57,10 @@ module GEOS_LdasGridCompMod
   integer,allocatable :: LAND(:)
   integer,allocatable :: LANDPERT(:)
   integer :: ENSAVG, LANDASSIM
-  integer :: NUM_ENSEMBLE, MODIS_DVG
+  integer :: NUM_ENSEMBLE, MODIS_DVG, NT, NT_LAND
   integer, parameter          :: NUM_CHILDREN = 1
   type (MAPL_LocStreamXFORM)  :: XFORM_IN (NUM_CHILDREN)
-
+  type(MAPL_LocStream)        :: surf_locstream
   logical :: assim
 contains
 
@@ -375,7 +375,6 @@ contains
     type(ESMF_DistGrid) :: distgrid
 
     ! MAPL variables
-    type(MAPL_LocStream) :: surf_locstream
     type(MAPL_LocStream) :: land_locstream
     type(MAPL_MetaComp), pointer :: MAPL=>null() ! GC's MAPL obj
     type(MAPL_MetaComp), pointer :: CHILD_MAPL=>null() ! Child's MAPL obj
@@ -596,7 +595,14 @@ contains
          rc=status                                                              &
          )
     VERIFY_(status)
-
+    NT_LAND = land_nt_local
+    call MAPL_LocStreamGet(                                                     &
+         surf_locstream,                                                        &
+         NT_LOCAL=NT,                                                           &
+         rc=status                                                              &
+         )
+    VERIFY_(status)
+    
     ! -get-component's-internal-state-
     call ESMF_UserCompGetInternalState(gc, 'TILE_COORD', tcwrap, status)
     VERIFY_(status)
@@ -821,9 +827,9 @@ contains
     type(MAPL_MetaComp), pointer :: MAPL
 
     ! Misc variables
-    integer :: igc,i, NT
+    integer :: igc,i
     logical :: IAmRoot
-    integer :: mpierr
+    integer :: mpierr, MYPE, nDEs
     integer :: LSM_CHOICE
 
     ! Pointers to imports
@@ -836,7 +842,7 @@ contains
     real, pointer, dimension(:)     :: MODIS_VISDFTILE => NULL()
     real, pointer, dimension(:)     :: MODIS_NIRDFTILE => NULL()
     integer, pointer, dimension(:)  :: tiletype => NULL()
-
+    
     ! Begin...
 
     ! Get component's name and setup traceback handle
@@ -853,44 +859,20 @@ contains
     call MAPL_TimerOn(MAPL, "Run")
 
     ! Get information about children
-    call MAPL_Get(MAPL, GCS=gcs, GIM=gim, GEX=gex, GCNAMES=gcnames, TILETYPES = TILETYPE,rc=status)
+    call MAPL_Get(MAPL, GCS=gcs, GIM=gim, GEX=gex, GCNAMES=gcnames,rc=status)
     VERIFY_(STATUS)
-
+ 
     ! MPI
     call ESMF_VmGetCurrent(vm, rc=status)
     VERIFY_(status)
     IAmRoot = MAPL_Am_I_Root(vm)
+    call ESMF_VmGet(vm, mpicommunicator=mpicomm, rc=status)
+    call ESMF_VMGet(VM, localpet=MYPE, petcount=nDEs,  RC=STATUS)
+    VERIFY_(status)
     !call ESMF_VmGet(vm, mpicommunicator=mpicomm, rc=status)
     !VERIFY_(status)
 
     call MAPL_GetResource ( MAPL, LSM_CHOICE, Label="LSM_CHOICE:", DEFAULT=1, RC=STATUS)
-
-    IF (MODIS_DVG == 1) THEN
-
-       ! Pointers to gridded imports
-       !----------------------------
-       call MAPL_GetPointer(IMPORT  , MODIS_LAI   , 'MODIS_LAI'  , RC=STATUS); VERIFY_(STATUS)
-       call MAPL_GetPointer(IMPORT  , MODIS_VISDF , 'MODIS_VISDF', RC=STATUS); VERIFY_(STATUS)
-       call MAPL_GetPointer(IMPORT  , MODIS_NIRDF , 'MODIS_NIRDF', RC=STATUS); VERIFY_(STATUS)
-
-       ! allocate tile-space vectors
-       ! ---------------------------
-
-       NT = size(TileType) 
-
-       allocate(MODIS_LAITILE   (NT), STAT=STATUS) ; VERIFY_(STATUS)
-       allocate(MODIS_VISDFTILE (NT), STAT=STATUS) ; VERIFY_(STATUS)
-       allocate(MODIS_NIRDFTILE (NT), STAT=STATUS) ; VERIFY_(STATUS)
-
-       ! Fill the child's import state on his location stream from
-       ! variables on Surface's location stream.
-       !----------------------------------------------------------
-
-       call FILLIN_TILE(GIM(DATAATM(1)), 'MODIS_LAI'  , MODIS_LAITILE  ,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
-       call FILLIN_TILE(GIM(DATAATM(1)), 'MODIS_VISDF', MODIS_VISDFTILE,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
-       call FILLIN_TILE(GIM(DATAATM(1)), 'MODIS_NIRDF', MODIS_NIRDFTILE,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
-
-    ENDIF    
 
     ! Get current time
     call ESMF_ClockGet(clock, currTime=ModelTimeCur, rc=status)
@@ -920,12 +902,43 @@ contains
        call MAPL_TimerOff(MAPL, gcnames(igc))
     enddo
 
-
     igc = DATAATM(1)
     call MAPL_TimerOn(MAPL, gcnames(igc))
     call ESMF_GridCompRun(gcs(igc), importState=gim(igc), exportState=gex(igc), clock=clock, userRC=status)
     VERIFY_(status)
     call MAPL_TimerOff(MAPL, gcnames(igc))
+
+    IF (MODIS_DVG == 1) THEN
+
+       ! Pointers to gridded imports
+       !----------------------------
+       call MAPL_GetPointer(IMPORT  , MODIS_LAI   , 'MODIS_LAI'  , RC=STATUS); VERIFY_(STATUS)
+       call MAPL_GetPointer(IMPORT  , MODIS_VISDF , 'MODIS_VISDF', RC=STATUS); VERIFY_(STATUS)
+       call MAPL_GetPointer(IMPORT  , MODIS_NIRDF , 'MODIS_NIRDF', RC=STATUS); VERIFY_(STATUS)
+
+       ! allocate tile-space vectors
+       ! ---------------------------
+
+       allocate(MODIS_LAITILE   (NT), STAT=STATUS) ; VERIFY_(STATUS)
+       allocate(MODIS_VISDFTILE (NT), STAT=STATUS) ; VERIFY_(STATUS)
+       allocate(MODIS_NIRDFTILE (NT), STAT=STATUS) ; VERIFY_(STATUS)
+
+       ! Transform imports to the tiles
+       !-------------------------------
+
+       call MAPL_LocStreamTransform( SURF_LOCSTREAM, MODIS_LAITILE,   MODIS_LAI  , RC=STATUS); VERIFY_(STATUS)
+       call MAPL_LocStreamTransform( SURF_LOCSTREAM, MODIS_VISDFTILE, MODIS_VISDF, RC=STATUS); VERIFY_(STATUS)
+       call MAPL_LocStreamTransform( SURF_LOCSTREAM, MODIS_NIRDFTILE, MODIS_NIRDF, RC=STATUS); VERIFY_(STATUS)
+
+       ! Fill the child's import state on his location stream from
+       ! variables on Surface's location stream.
+       !----------------------------------------------------------
+
+       call FILLIN_TILE(GIM(LAND(1)), 'MODIS_LAI'  , MODIS_LAITILE  ,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
+       call FILLIN_TILE(GIM(LAND(1)), 'MODIS_VISDF', MODIS_VISDFTILE,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
+       call FILLIN_TILE(GIM(LAND(1)), 'MODIS_NIRDF', MODIS_NIRDFTILE,XFORM_IN(1), RC=STATUS); VERIFY_(STATUS)
+
+    ENDIF    
 
     do i  = 1,NUM_ENSEMBLE
 
@@ -1006,7 +1019,7 @@ contains
         
         !  Locals
         
-        character(len=ESMF_MAXSTR)   :: IAm='FILLIN_TILE1D'
+        character(len=ESMF_MAXSTR)   :: IAm='FILLIN_TILE'
         integer                      :: STATUS
         real, pointer                :: PTR(:)
         type (ESMF_Field)            :: field
@@ -1017,6 +1030,7 @@ contains
         !--------------------------------------------------------------      
         
         if (STATUS/=ESMF_SUCCESS) then
+           print *, 'ESMF_SUCCESS FAILED'
            RETURN_(ESMF_SUCCESS)
         endif
         
@@ -1031,10 +1045,10 @@ contains
         call MAPL_LocStreamTransform( PTR, XFORM, TILE, RC=STATUS ) 
         VERIFY_(STATUS)
         
-    RETURN_(ESMF_SUCCESS)
+        RETURN_(ESMF_SUCCESS)
     
-  end subroutine FILLIN_TILE
-
+      end subroutine FILLIN_TILE
+     
   end subroutine Run
 
 
